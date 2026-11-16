@@ -42,9 +42,10 @@ python scripts/create_public_seed_db.py
 ```
 
 The script copies `data/aqua_kz.db` to `data/public_seed.db`, removes non-grid
-locations and their observations, and rewrites retained mask paths so local file
-paths are not published. It never modifies the source database and refuses to
-overwrite an existing output. The Docker image includes only this snapshot and
+locations and their observations, adds selectable baseline monitoring points for
+major Kazakhstan cities (including Rudny), and rewrites retained mask paths so
+local file paths are not published. It never modifies the source database and
+refuses to overwrite an existing output. The Docker image includes only this snapshot and
 `ml/weights/best_model.pth`, not local databases, prediction files, backups, logs,
 training data, or `.env`.
 

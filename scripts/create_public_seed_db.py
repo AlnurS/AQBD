@@ -4,7 +4,57 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
+
+
+BASELINE_CITIES = (
+    ("Алматы", 43.2389, 76.8897),
+    ("Астана", 51.1694, 71.4491),
+    ("Шымкент", 42.3417, 69.5901),
+    ("Караганда", 49.8047, 73.1094),
+    ("Актобе", 50.2839, 57.1670),
+    ("Тараз", 42.9000, 71.3667),
+    ("Павлодар", 52.2873, 76.9674),
+    ("Усть-Каменогорск", 49.9483, 82.6285),
+    ("Семей", 50.4111, 80.2275),
+    ("Атырау", 47.0945, 51.9238),
+    ("Костанай", 53.2144, 63.6246),
+    ("Кызылорда", 44.8488, 65.4823),
+    ("Петропавловск", 54.8720, 69.1500),
+    ("Туркестан", 43.3019, 68.2690),
+    ("Уральск", 51.2278, 51.3865),
+    ("Актау", 43.6532, 51.1975),
+    ("Кокшетау", 53.2833, 69.3833),
+    ("Талдыкорган", 45.0156, 78.3739),
+    ("Темиртау", 50.0549, 72.9646),
+    ("Экибастуз", 51.7237, 75.3229),
+    ("Рудный", 52.9529, 63.1308),
+)
+
+
+def add_baseline_city_locations(connection: sqlite3.Connection) -> int:
+    """Insert stable, selectable city monitoring points into the public snapshot."""
+    created_at = datetime.now(timezone.utc).isoformat()
+    before = connection.total_changes
+    connection.executemany(
+        """INSERT OR IGNORE INTO monitoring_locations
+           (id, name, latitude, longitude, region, created_at, active, location_type)
+           VALUES (?, ?, ?, ?, ?, ?, 1, 'user_point')""",
+        [
+            (
+                str(uuid5(NAMESPACE_URL, f"https://aqua-kz.example/city/{name}")),
+                name,
+                latitude,
+                longitude,
+                "Базовая точка по Казахстану",
+                created_at,
+            )
+            for name, latitude, longitude in BASELINE_CITIES
+        ],
+    )
+    return connection.total_changes - before
 
 
 def create_public_seed(source_path: Path, output_path: Path) -> tuple[int, int, int]:
@@ -58,17 +108,23 @@ def create_public_seed(source_path: Path, output_path: Path) -> tuple[int, int, 
                          AND c.cell_id = national_grid_status.cell_id
                    )"""
             )
+        add_baseline_city_locations(output)
         output.commit()
 
         location_count = output.execute("SELECT COUNT(*) FROM monitoring_locations").fetchone()[0]
         grid_count = output.execute("SELECT COUNT(*) FROM national_grid_cells").fetchone()[0]
+        city_count = output.execute(
+            """SELECT COUNT(*) FROM monitoring_locations
+               WHERE location_type = 'user_point'
+                 AND region = 'Базовая точка по Казахстану'"""
+        ).fetchone()[0]
         observation_count = output.execute("SELECT COUNT(*) FROM monitoring_observations").fetchone()[0]
         non_grid_locations = output.execute(
             """SELECT COUNT(*) FROM monitoring_locations
-               WHERE location_type != 'national_grid'"""
+               WHERE location_type NOT IN ('national_grid', 'user_point')"""
         ).fetchone()[0]
-        if location_count != grid_count or non_grid_locations:
-            raise ValueError("Public seed validation failed: non-grid locations remain.")
+        if city_count != len(BASELINE_CITIES) or location_count != grid_count + city_count or non_grid_locations:
+            raise ValueError("Public seed validation failed: expected only national grid and baseline city locations.")
         output.execute("VACUUM")
 
     return location_count, observation_count, grid_count
