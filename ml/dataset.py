@@ -11,6 +11,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
 from app.config import DATASET_ROOT, PATCH_CHANNELS
+from ml.normalization import normalize_patch
 
 
 def training_augmentations() -> A.Compose:
@@ -22,16 +23,6 @@ def training_augmentations() -> A.Compose:
             A.RandomRotate90(p=0.5),
         ]
     )
-
-
-def normalize_patch(image: np.ndarray) -> np.ndarray:
-    """Map reflectance and NDVI ranges into stable 0..1 model inputs."""
-    if image.shape[0] != len(PATCH_CHANNELS):
-        raise ValueError(f"Expected {len(PATCH_CHANNELS)} channels, received {image.shape[0]}.")
-    normalized = image.astype(np.float32, copy=True)
-    normalized[:6] = np.clip((normalized[:6] + 0.2) / 1.2, 0.0, 1.0)
-    normalized[6] = np.clip((normalized[6] + 1.0) / 2.0, 0.0, 1.0)
-    return normalized
 
 
 class NpyDroughtPatchDataset(Dataset[tuple[Tensor, Tensor]]):

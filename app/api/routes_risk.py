@@ -4,18 +4,21 @@ from fastapi import APIRouter
 
 from app.schemas import ObservationInput, ObservationWithRisk, RiskAssessment, RiskSummary
 from app.services.drought_service import calculate_risk
-from app.services.satellite_service import load_sample_observations_with_risk
 
 router = APIRouter(prefix="/api", tags=["risk"])
 
 
 @router.get("/risk-zones", response_model=list[ObservationWithRisk])
 def get_risk_zones() -> list[ObservationWithRisk]:
+    from app.services.satellite_service import load_sample_observations_with_risk
+
     return load_sample_observations_with_risk()
 
 
 @router.get("/risk-summary", response_model=RiskSummary)
 def get_risk_summary() -> RiskSummary:
+    from app.services.satellite_service import load_sample_observations_with_risk
+
     observations = load_sample_observations_with_risk()
     counts = {level: sum(item.risk_level == level for item in observations) for level in ("low", "medium", "high")}
     total = len(observations)

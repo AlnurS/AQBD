@@ -15,11 +15,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import rasterio
 import requests
-from rasterio.enums import Resampling
+
+if TYPE_CHECKING:
+    from rasterio.enums import Resampling
 
 from app.config import (
     DATASET_ROOT,
@@ -206,6 +208,8 @@ def _grid_geometries(region, max_patches: int) -> Iterable:
 
 
 def _read_raster(path: Path, bands: int, resampling: Resampling) -> np.ndarray:
+    import rasterio
+
     with rasterio.open(path) as source:
         if source.count != bands:
             raise ValueError(f"Expected {bands} bands in {path.name}, received {source.count}.")
@@ -252,6 +256,8 @@ def _download_geotiff(image, path: Path, geometry) -> None:
 
 def _download_patch(data_image, label_image, geometry, temp_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     """Download a single remote tile as GeoTIFFs and convert it to numpy arrays."""
+    from rasterio.enums import Resampling
+
     patch_path = temp_dir / "patch.tif"
     stacked_image = data_image.addBands(label_image.toFloat())
     _download_geotiff(stacked_image, patch_path, geometry)

@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import date
 from typing import Protocol
 
-import pandas as pd
-
 from app.config import SAMPLE_OBSERVATIONS_PATH
 from app.schemas import ObservationInput, ObservationRecord, ObservationWithRisk
 from app.services.drought_service import calculate_risk
@@ -35,6 +33,8 @@ class OfflineSatelliteService:
 
 def load_sample_observations_with_risk() -> list[ObservationWithRisk]:
     """Load local synthetic observations and attach deterministic risk metadata."""
+    import pandas as pd
+
     data = pd.read_csv(SAMPLE_OBSERVATIONS_PATH)
     required_columns = {
         "id", "latitude", "longitude", "date", "ndvi", "ndmi",

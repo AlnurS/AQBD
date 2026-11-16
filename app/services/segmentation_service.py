@@ -6,11 +6,9 @@ import io
 from pathlib import Path
 
 import numpy as np
-import torch
 
 from app.config import PATCH_CHANNELS, PATCH_SIZE, SEGMENTATION_MODEL_PATH
-from ml.dataset import normalize_patch
-from ml.train import build_unet
+from ml.normalization import normalize_patch
 
 
 class SegmentationModelUnavailableError(RuntimeError):
@@ -42,6 +40,10 @@ def infer_patch(patch: np.ndarray, checkpoint_path: Path = SEGMENTATION_MODEL_PA
         raise SegmentationModelUnavailableError(
             "Segmentation model is unavailable. Generate patches and train `backend/ml/train.py` first."
         )
+    import torch
+
+    from ml.train import build_unet
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     encoder_name = str(checkpoint.get("encoder_name", "resnet34"))
