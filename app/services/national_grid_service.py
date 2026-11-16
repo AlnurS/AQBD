@@ -130,7 +130,7 @@ def grid_results(
                LEFT JOIN national_grid_status s ON s.grid_version = c.grid_version
                    AND s.cell_id = c.cell_id AND s.year = ? AND s.month = ?
                LEFT JOIN monitoring_observations o ON o.location_id = c.location_id
-                   AND o.year = ? AND o.month = ?
+                   AND o.year = ? AND o.month = ? AND o.period = 'month'
                WHERE c.grid_version = ? AND c.active = 1
                ORDER BY c.cell_id""",
             (year, month, year, month, grid_version),

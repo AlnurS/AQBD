@@ -106,20 +106,50 @@ def train_segmentation(
     config: TrainingConfig = TrainingConfig(),
     dataset_root: Path = DATASET_ROOT,
     checkpoint_path: Path = SEGMENTATION_MODEL_PATH,
+    initial_checkpoint_path: Path | None = None,
     progress_callback: Callable[[dict[str, float | int | bool]], None] | None = None,
 ) -> dict[str, float | int | str]:
-    """Train U-Net and persist the checkpoint with the lowest validation loss."""
+    """Train U-Net from scratch or fine-tune it while retaining the best validation checkpoint."""
     train_loader, val_loader, test_loader = create_dataloaders(
         dataset_root=dataset_root,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = build_unet(config.encoder_name).to(device)
+    initial_checkpoint = None
+    encoder_name = config.encoder_name
+    if initial_checkpoint_path is not None:
+        if not initial_checkpoint_path.is_file():
+            raise FileNotFoundError(f"Initial checkpoint not found: {initial_checkpoint_path}")
+        initial_checkpoint = torch.load(initial_checkpoint_path, map_location=device, weights_only=True)
+        if initial_checkpoint.get("in_channels") != len(PATCH_CHANNELS):
+            raise ValueError(
+                f"Expected an initial checkpoint with {len(PATCH_CHANNELS)} input channels, "
+                f"received {initial_checkpoint.get('in_channels')}."
+            )
+        encoder_name = str(initial_checkpoint.get("encoder_name", config.encoder_name))
+    model = build_unet(encoder_name).to(device)
+    if initial_checkpoint is not None:
+        model.load_state_dict(initial_checkpoint["state_dict"])
     criterion = BCEDiceLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    best_validation_loss = float("inf")
+    initial_validation_loss = (
+        _run_epoch(model, val_loader, criterion, device)
+        if initial_checkpoint is not None
+        else None
+    )
+    best_validation_loss = initial_validation_loss if initial_validation_loss is not None else float("inf")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    if initial_checkpoint is not None:
+        torch.save(
+            {
+                **initial_checkpoint,
+                "validation_loss": best_validation_loss,
+                "fine_tuned_from": str(initial_checkpoint_path),
+                "fine_tuning_epoch": 0,
+            },
+            checkpoint_path,
+        )
 
     for epoch in range(1, config.epochs + 1):
         training_loss = _run_epoch(model, train_loader, criterion, device, optimizer)
@@ -127,14 +157,20 @@ def train_segmentation(
         improved = validation_loss < best_validation_loss
         if improved:
             best_validation_loss = validation_loss
+            checkpoint = {
+                "state_dict": model.state_dict(),
+                "encoder_name": encoder_name,
+                "in_channels": len(PATCH_CHANNELS),
+                "epoch": int(initial_checkpoint.get("epoch", 0)) + epoch if initial_checkpoint else epoch,
+                "validation_loss": validation_loss,
+            }
+            if initial_checkpoint is not None:
+                checkpoint.update(
+                    fine_tuned_from=str(initial_checkpoint_path),
+                    fine_tuning_epoch=epoch,
+                )
             torch.save(
-                {
-                    "state_dict": model.state_dict(),
-                    "encoder_name": config.encoder_name,
-                    "in_channels": len(PATCH_CHANNELS),
-                    "epoch": epoch,
-                    "validation_loss": validation_loss,
-                },
+                checkpoint,
                 checkpoint_path,
             )
         if progress_callback:
@@ -154,6 +190,11 @@ def train_segmentation(
         "best_validation_loss": round(best_validation_loss, 6),
         "epochs": config.epochs,
         "device": str(device),
+        **(
+            {"initial_validation_loss": round(initial_validation_loss, 6)}
+            if initial_validation_loss is not None
+            else {}
+        ),
         "test_loss": round(test_metrics["loss"], 6),
         "test_precision": round(test_metrics["precision"], 6),
         "test_recall": round(test_metrics["recall"], 6),

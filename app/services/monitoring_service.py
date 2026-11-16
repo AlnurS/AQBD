@@ -46,6 +46,7 @@ def initialize_monitoring_storage() -> None:
                 inference_run_id TEXT NOT NULL,
                 year INTEGER NOT NULL,
                 month INTEGER NOT NULL,
+                period TEXT NOT NULL DEFAULT 'month',
                 drought_fraction REAL NOT NULL,
                 drought_pixel_count INTEGER NOT NULL,
                 total_pixel_count INTEGER NOT NULL,
@@ -74,7 +75,7 @@ def initialize_monitoring_storage() -> None:
                 data_source TEXT NOT NULL,
                 metadata TEXT,
                 created_at TEXT NOT NULL,
-                UNIQUE(location_id, year, month)
+                UNIQUE(location_id, year, period, month)
             )
             """
         )
@@ -82,6 +83,61 @@ def initialize_monitoring_storage() -> None:
         for column in ("ndvi_baseline", "ndmi_baseline", "ndvi_anomaly", "ndmi_anomaly"):
             if column not in existing_columns:
                 connection.execute(f"ALTER TABLE monitoring_observations ADD COLUMN {column} REAL")
+        if "period" not in existing_columns:
+            connection.execute("ALTER TABLE monitoring_observations ADD COLUMN period TEXT NOT NULL DEFAULT 'month'")
+        observation_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'monitoring_observations'"
+        ).fetchone()[0]
+        if "UNIQUE(location_id, year, month)" in observation_sql:
+            connection.execute("ALTER TABLE monitoring_observations RENAME TO monitoring_observations_legacy")
+            connection.execute(
+                """
+                CREATE TABLE monitoring_observations (
+                    id TEXT PRIMARY KEY,
+                    location_id TEXT NOT NULL REFERENCES monitoring_locations(id),
+                    observed_at TEXT NOT NULL,
+                    inference_run_id TEXT NOT NULL,
+                    year INTEGER NOT NULL,
+                    month INTEGER NOT NULL,
+                    period TEXT NOT NULL DEFAULT 'month',
+                    drought_fraction REAL NOT NULL,
+                    drought_pixel_count INTEGER NOT NULL,
+                    total_pixel_count INTEGER NOT NULL,
+                    ndvi REAL,
+                    ndmi REAL,
+                    ndvi_baseline REAL,
+                    ndmi_baseline REAL,
+                    ndvi_anomaly REAL,
+                    ndmi_anomaly REAL,
+                    precipitation_mm REAL,
+                    precipitation_anomaly REAL,
+                    temperature_c REAL,
+                    temperature_anomaly REAL,
+                    soil_moisture REAL,
+                    soil_moisture_anomaly REAL,
+                    vegetation_stress REAL,
+                    rainfall_stress REAL,
+                    soil_moisture_stress REAL,
+                    heat_stress REAL,
+                    segmentation_stress REAL NOT NULL,
+                    risk_score REAL NOT NULL,
+                    risk_level TEXT NOT NULL,
+                    trend TEXT NOT NULL,
+                    explanation TEXT NOT NULL,
+                    data_quality TEXT NOT NULL,
+                    data_source TEXT NOT NULL,
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(location_id, year, period, month)
+                )
+                """
+            )
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(monitoring_observations)")]
+            connection.execute(
+                f"INSERT INTO monitoring_observations ({', '.join(columns)}) "
+                f"SELECT {', '.join(columns)} FROM monitoring_observations_legacy"
+            )
+            connection.execute("DROP TABLE monitoring_observations_legacy")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS national_grid_cells (
@@ -221,23 +277,23 @@ def get_observation(observation_id: str) -> dict[str, Any] | None:
     return _row(row)
 
 
-def get_observation_for_period(location_id: str, year: int, month: int) -> dict[str, Any] | None:
+def get_observation_for_period(location_id: str, year: int, month: int, period: str = "month") -> dict[str, Any] | None:
     initialize_monitoring_storage()
     with inference_run_service._connect() as connection:
         row = connection.execute(
-            "SELECT * FROM monitoring_observations WHERE location_id = ? AND year = ? AND month = ?",
-            (location_id, year, month),
+            "SELECT * FROM monitoring_observations WHERE location_id = ? AND year = ? AND month = ? AND period = ?",
+            (location_id, year, month, period),
         ).fetchone()
     return _row(row)
 
 
-def delete_observation_for_period(location_id: str, year: int, month: int) -> bool:
+def delete_observation_for_period(location_id: str, year: int, month: int, period: str = "month") -> bool:
     """Delete one explicitly targeted observation before a controlled re-analysis."""
     initialize_monitoring_storage()
     with inference_run_service._connect() as connection:
         cursor = connection.execute(
-            "DELETE FROM monitoring_observations WHERE location_id = ? AND year = ? AND month = ?",
-            (location_id, year, month),
+            "DELETE FROM monitoring_observations WHERE location_id = ? AND year = ? AND month = ? AND period = ?",
+            (location_id, year, month, period),
         )
     return cursor.rowcount > 0
 

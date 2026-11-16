@@ -33,6 +33,8 @@ from ml.export_gee_dataset import (
     EarthEngineConfigurationError,
     SatelliteImageryUnavailableError,
     fetch_patch_for_coordinates,
+    fetch_patch_for_period,
+    seasonal_date_range,
     scene_date_range,
 )
 
@@ -83,14 +85,23 @@ def _observation_date(request: MonitoringAnalyzeRequest) -> date:
 
 def _perform_analysis(
     location: dict, observed_at: date, enrich: bool, metadata: dict | None,
-    requested_month: int | None = None, force: bool = False,
+    requested_month: int | None = None, force: bool = False, period: str = "month",
 ) -> tuple[dict, dict]:
-    if not force and monitoring_service.get_observation_for_period(location["id"], observed_at.year, observed_at.month):
-        raise HTTPException(status_code=409, detail="An observation already exists for this location and month.")
+    if not force and monitoring_service.get_observation_for_period(
+        location["id"], observed_at.year, observed_at.month, period
+    ):
+        raise HTTPException(status_code=409, detail="An observation already exists for this location and period.")
     try:
-        patch = fetch_patch_for_coordinates(
-            location["latitude"], location["longitude"], observed_at.year, requested_month
-        )
+        if period == "month":
+            patch = fetch_patch_for_coordinates(
+                location["latitude"], location["longitude"], observed_at.year, requested_month
+            )
+            scene_start, scene_end = scene_date_range(observed_at.year, requested_month)
+        else:
+            patch = fetch_patch_for_period(
+                location["latitude"], location["longitude"], observed_at.year, period
+            )
+            scene_start, scene_end = seasonal_date_range(observed_at.year, period)
         probability_mask, drought_fraction = infer_patch(patch)
     except EarthEngineConfigurationError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -100,7 +111,6 @@ def _perform_analysis(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    scene_start, scene_end = scene_date_range(observed_at.year, requested_month)
     run = inference_run_service.save_inference_run(
         probability_mask, drought_fraction, 0.5, "coordinates",
         latitude=location["latitude"], longitude=location["longitude"], year=observed_at.year,
@@ -141,7 +151,7 @@ def _perform_analysis(
     previous_observation = previous_observations[-1] if previous_observations else None
     observation = {
         "id": run["id"], "location_id": location["id"], "observed_at": observed_at.isoformat(),
-        "inference_run_id": run["id"], "year": observed_at.year, "month": observed_at.month,
+        "inference_run_id": run["id"], "year": observed_at.year, "month": observed_at.month, "period": period,
         "drought_fraction": drought_fraction, "drought_pixel_count": run["drought_pixel_count"],
         "total_pixel_count": run["total_pixel_count"], "vegetation_stress": assessment.component_stress["vegetation_stress"],
         "ndvi": vegetation.ndvi if vegetation else None,
@@ -243,8 +253,18 @@ def delete_monitoring_location(location_id: str) -> MonitoringLocation:
 @router.post("/locations/{location_id}/analyze", response_model=AnalyzeResponse)
 def analyze_location(location_id: str, request: MonitoringAnalyzeRequest) -> AnalyzeResponse:
     location = _location_or_404(location_id)
+    if request.period == "warm":
+        observed_at = date(request.year, 8, 1)
+        metadata = {**(request.metadata or {}), "period_label": "Тёплый период (май–август)"}
+    elif request.period == "cold":
+        observed_at = date(request.year, 3, 1)
+        metadata = {**(request.metadata or {}), "period_label": f"Холодный период (ноябрь {request.year - 1} — март {request.year})"}
+    else:
+        observed_at = _observation_date(request)
+        metadata = request.metadata
     observation, run = _perform_analysis(
-        location, _observation_date(request), request.enrich, request.metadata, request.month
+        location, observed_at, request.enrich, metadata, request.month,
+        period=request.period or "month",
     )
     compact_observation = _observation_response(observation, run)
     return AnalyzeResponse(

@@ -10,6 +10,7 @@ from app.services.drought_risk_service import assess_drought_risk
 from app.services.nasa_power_service import MonthlyWeather
 from app.services.vegetation_service import VegetationIndicators
 from app.services.recommendation_service import generate_recommendations
+from ml.export_gee_dataset import seasonal_date_range
 
 
 def configure_storage(monkeypatch, tmp_path) -> None:
@@ -109,6 +110,126 @@ def test_analyze_latest_timeline_and_outlook(monkeypatch, tmp_path) -> None:
     assert timeline.status_code == 200 and timeline.json()["summary"]["observation_count"] == 1
     assert timeline.json()["observations"][0]["inference_run"]["id"] == result["inference_run"]["id"]
     assert outlook.json()["forecast_available"] is False
+
+
+def test_seasonal_period_dates_use_year_of_cold_period_end() -> None:
+    assert seasonal_date_range(2025, "warm") == (date(2025, 5, 1), date(2025, 9, 1))
+    assert seasonal_date_range(2025, "cold") == (date(2024, 11, 1), date(2025, 4, 1))
+
+
+def test_analyze_warm_and_cold_periods_as_distinct_seasonal_composites(monkeypatch, tmp_path) -> None:
+    configure_storage(monkeypatch, tmp_path)
+    periods = []
+
+    def fetch_period(_latitude, _longitude, year, period):
+        periods.append((year, period))
+        return np.zeros((7, 2, 2))
+
+    monkeypatch.setattr(routes_monitoring, "fetch_patch_for_period", fetch_period)
+    monkeypatch.setattr(routes_monitoring, "infer_patch", lambda _patch: (np.array([[0.1, 0.8], [0.2, 0.9]]), 0.5))
+    client = TestClient(app)
+    location_id = create_location(client)["id"]
+
+    warm = client.post(
+        f"/api/monitoring/locations/{location_id}/analyze",
+        json={"year": 2025, "period": "warm"},
+    )
+    cold = client.post(
+        f"/api/monitoring/locations/{location_id}/analyze",
+        json={"year": 2025, "period": "cold"},
+    )
+
+    assert warm.status_code == cold.status_code == 200
+    assert periods == [(2025, "warm"), (2025, "cold")]
+    assert warm.json()["observation"]["period"] == "warm"
+    assert warm.json()["observation"]["metadata"]["period_label"] == "Тёплый период (май–август)"
+    assert warm.json()["inference_run"]["scene_start_date"] == "2025-05-01"
+    assert warm.json()["inference_run"]["scene_end_date"] == "2025-09-01"
+    assert cold.json()["observation"]["period"] == "cold"
+    assert cold.json()["observation"]["metadata"]["period_label"] == "Холодный период (ноябрь 2024 — март 2025)"
+    assert cold.json()["inference_run"]["scene_start_date"] == "2024-11-01"
+    assert cold.json()["inference_run"]["scene_end_date"] == "2025-04-01"
+    assert client.post(
+        f"/api/monitoring/locations/{location_id}/analyze",
+        json={"year": 2025, "period": "warm"},
+    ).status_code == 409
+
+
+def test_seasonal_period_rejects_month_and_monthly_enrichment() -> None:
+    client = TestClient(app)
+    assert client.post(
+        "/api/monitoring/locations/any/analyze",
+        json={"year": 2025, "period": "warm", "month": 8},
+    ).status_code == 422
+    assert client.post(
+        "/api/monitoring/locations/any/analyze",
+        json={"year": 2025, "period": "cold", "enrich": True},
+    ).status_code == 422
+
+
+def test_observation_storage_migrates_monthly_rows_and_allows_seasonal_rows(monkeypatch, tmp_path) -> None:
+    configure_storage(monkeypatch, tmp_path)
+    location = monitoring_service.create_location("Migration test", 49.8, 73.1, "Karaganda")
+    monitoring_service.save_observation({
+        "id": "legacy-monthly-observation",
+        "location_id": location["id"],
+        "observed_at": "2025-08-01",
+        "inference_run_id": "legacy-monthly-run",
+        "year": 2025,
+        "month": 8,
+        "drought_fraction": 0.5,
+        "drought_pixel_count": 2,
+        "total_pixel_count": 4,
+        "segmentation_stress": 0.5,
+        "risk_score": 0.5,
+        "risk_level": "medium",
+        "trend": "insufficient_data",
+        "explanation": "Existing monthly result.",
+        "data_quality": "segmentation_only",
+        "data_source": "test",
+    })
+
+    with inference_run_service._connect() as connection:
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='monitoring_observations'"
+        ).fetchone()[0]
+        staging_sql = table_sql.replace("CREATE TABLE monitoring_observations", "CREATE TABLE observations_staging", 1)
+        legacy_sql = staging_sql.replace("observations_staging", "monitoring_observations")
+        legacy_sql = legacy_sql.replace("    period TEXT NOT NULL DEFAULT 'month',\n", "")
+        legacy_sql = legacy_sql.replace("UNIQUE(location_id, year, period, month)", "UNIQUE(location_id, year, month)")
+        connection.execute("ALTER TABLE monitoring_observations RENAME TO observations_current")
+        connection.execute(legacy_sql)
+        legacy_columns = [row[1] for row in connection.execute("PRAGMA table_info(monitoring_observations)")]
+        connection.execute(
+            f"INSERT INTO monitoring_observations ({', '.join(legacy_columns)}) "
+            f"SELECT {', '.join(legacy_columns)} FROM observations_current"
+        )
+        connection.execute("DROP TABLE observations_current")
+
+    monitoring_service.initialize_monitoring_storage()
+    existing = monitoring_service.get_observation_for_period(location["id"], 2025, 8)
+    assert existing is not None
+    assert existing["period"] == "month"
+    seasonal = monitoring_service.save_observation({
+        "location_id": location["id"],
+        "observed_at": "2025-08-01",
+        "inference_run_id": "warm-period-run",
+        "year": 2025,
+        "month": 8,
+        "period": "warm",
+        "drought_fraction": 0.4,
+        "drought_pixel_count": 1,
+        "total_pixel_count": 4,
+        "segmentation_stress": 0.4,
+        "risk_score": 0.4,
+        "risk_level": "medium",
+        "trend": "insufficient_data",
+        "explanation": "Seasonal result.",
+        "data_quality": "segmentation_only",
+        "data_source": "test",
+    })
+    assert seasonal["period"] == "warm"
+    assert monitoring_service.get_observation_for_period(location["id"], 2025, 8, "warm")["id"] == seasonal["id"]
 
 
 def test_analyze_enrichment_populates_weather_and_partial_quality(monkeypatch, tmp_path) -> None:

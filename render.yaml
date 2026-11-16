@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: aqua-kz-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: APP_NAME
+        value: AQUA KZ public demo
+      - key: APP_VERSION
+        value: 0.1.0
+      - key: FRONTEND_ORIGINS
+        sync: false

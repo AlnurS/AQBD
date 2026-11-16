@@ -60,3 +60,18 @@
 - The checkpoint from epoch 17 was selected as the best model.
 - The model achieved Dice 0.827955 and IoU 0.706419 on the test split.
 - Recall is higher than precision, so the model finds most target areas but can include extra pixels.
+
+## City-dataset fine-tuning — 2026-11-16
+
+- Dataset: `data/patches_kazakhstan_cities_2024` (45 paired patches: 30 train, 6 validation, 9 test).
+- The city-based split keeps the sampled cities disjoint: 10 train cities, 2 validation cities, and 3 test cities.
+- Initialization: the previous deployed seven-channel ResNet34 U-Net checkpoint (epoch 31).
+- Fine-tuning: 20 epochs, batch size 4, learning rate `1e-4`, CPU.
+- Best checkpoint: fine-tuning epoch 2 (cumulative checkpoint epoch 33), selected by validation loss.
+- Validation loss on the new validation split changed from `0.687350` before fine-tuning to `0.685597`.
+- Test metrics after fine-tuning: loss `1.102817`, Dice `0.655405`, IoU `0.487437`, precision `0.576260`, recall `0.759752`.
+- Baseline Dice on that same test split was `0.660443`; the test Dice was slightly lower after fine-tuning. The new checkpoint was selected for its lower validation loss, not for a test-set improvement.
+- The previous deployed checkpoint is preserved at `ml/weights/best_model_before_city_finetune_20261116.pth`.
+- Console and epoch log: `ml/weights/city-finetune-20261116.log`.
+
+These are small, geographically sampled datasets and VCI-derived proxy labels, not field-verified drought observations. Treat the results as an educational prototype, not a validated operational product.

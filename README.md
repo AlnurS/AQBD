@@ -31,6 +31,31 @@ cd backend
 python -m pytest tests -q
 ```
 
+## Public demonstration deployment
+
+The Render Blueprint in `render.yaml` builds the backend from this repository.
+Before the first deploy, create the public national-grid snapshot and include the
+selected model checkpoint:
+
+```powershell
+python scripts/create_public_seed_db.py
+```
+
+The script copies `data/aqua_kz.db` to `data/public_seed.db`, removes non-grid
+locations and their observations, and rewrites retained mask paths so local file
+paths are not published. It never modifies the source database and refuses to
+overwrite an existing output. The Docker image includes only this snapshot and
+`ml/weights/best_model.pth`, not local databases, prediction files, backups, logs,
+training data, or `.env`.
+
+In the Render dashboard, set `FRONTEND_ORIGINS` to the frontend site's origin
+(for example, `https://OWNER.github.io`; do not include the repository path).
+The free service sleeps when idle and uses an ephemeral filesystem: edits and new
+inference artifacts are lost after restarts or redeployments. The baked-in national
+grid snapshot is restored when a new instance starts. No Earth Engine credentials
+are included, so requests that fetch new satellite imagery require secure
+provider configuration in Render.
+
 ## API overview
 
 - `GET /health` reports backend availability.
@@ -62,6 +87,30 @@ earthengine authenticate
 earthengine set_project YOUR_EARTH_ENGINE_PROJECT
 ```
 
+To download a small dataset without starting model training, run from `backend`:
+
+```powershell
+python -m ml.export_dataset_cli --year 2024 --max-patches 20
+```
+
+The command reports each tile download and the number of usable patches saved.
+Adjust `--max-patches` to change the limit.
+
+To sample three patches around each of 15 major cities for the growing season
+of 2024 (45 requested patches, without training), run:
+
+```powershell
+python -m ml.export_city_dataset --year 2024 --patches-per-city 3
+```
+
+The city dataset is saved separately to `data/patches_kazakhstan_cities_2024`
+so it does not overwrite or mix with earlier regional samples. Cities, rather
+than individual neighboring patches, are assigned to train/validation/test
+splits. Sampling uses approximate rectangular areas around city centers; it
+does not guarantee every patch is agricultural land, and cloudy or unusable
+tiles may reduce the final count. These VCI-derived labels are educational
+proxies, not field-verified drought observations.
+
 Then use `POST /api/ml/dataset-export` and poll
 `GET /api/ml/dataset-export/{job_id}`. Export requires Google Earth Engine
 credentials, an Earth Engine-enabled Google Cloud project, and network access.
@@ -70,6 +119,11 @@ Alternatively, set `GEE_PROJECT` in `backend/.env`. Train after enough patches h
 ```powershell
 python -c "from ml.train import train_segmentation; print(train_segmentation())"
 ```
+
+On Windows, the backend uses the operating system certificate store for Python
+HTTPS requests. If Google API calls still fail with a certificate verification
+error, verify that the computer's date/time is correct and that HTTPS access to
+Google APIs is not being intercepted by an untrusted proxy.
 
 To run export and training together, use:
 
@@ -120,6 +174,14 @@ times out, the request falls back to `segmentation_only`. Retrieve history with
 `GET /api/monitoring/locations/{location_id}/timeline` and the current result
 with `/latest`. A bounded manual backfill is available at `/backfill`; it
 processes at most 24 months and skips existing location-month observations.
+
+The monitoring interface also supports seasonal satellite composites:
+`{"year": 2025, "period": "warm"}` covers May–August 2025, while
+`{"year": 2025, "period": "cold"}` covers November 2024–March 2025 (the
+selected year is the cold period's ending year). Seasonal observations are stored
+separately from calendar-month observations. Weather/vegetation enrichment remains
+available only for calendar-month analyses; seasonal analyses use satellite
+segmentation alone.
 
 The baseline is an approximate empirical mean for the same calendar month over the
 most recent ten full years before the requested year, not an official climatological
@@ -210,14 +272,22 @@ Engine batch. An operator must use the controlled, sequential CLI instead:
 
 # Controlled full sequential run, only after an operator has reviewed costs and credentials.
 .\.venv\Scripts\python.exe scripts\prepare_national_grid.py --year 2024 --month 9 --resume --enrich false
+
+# Prepare every month of a year; shows one overall terminal progress bar across all cell-months.
+.\.venv\Scripts\python.exe scripts\prepare_national_grid.py --year 2025 --all-months --resume --enrich false
 ```
 
 The CLI processes one cell at a time with a 1.5-second pause between requests,
 continues after a per-cell failure, records `missing` or `failed` instead of a
-fabricated score, and stores a configuration provenance version. `--force` is
+fabricated score, and stores a configuration provenance version. The progress
+bar reports completed cell-months and ready, skipped, missing, and failed counts;
+on a terminal it updates in place, and when output is redirected it writes
+readable progress lines. `--force` is
 an explicit warning-only override for a selected re-analysis; it must not be
 used casually. A full 329-cell run has at least about 8 minutes of intentional
 rate-limit delay, plus Earth Engine download/inference and optional NASA POWER
 latency; cloud filtering, credentials, provider quotas, and unavailable imagery
-can increase runtime substantially. It never modifies the existing Karaganda
-demo point.
+can increase runtime substantially. A full 12-month run processes up to 3,948
+cell-months and may take many hours. The `--resume` option skips cells that are
+already ready for the requested period. It never modifies the existing
+Karaganda demo point.

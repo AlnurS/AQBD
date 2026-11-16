@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+import truststore
 
+
+truststore.inject_into_ssl()
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 APP_DIR = BACKEND_DIR / "app"

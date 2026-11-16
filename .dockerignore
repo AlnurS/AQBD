@@ -1,0 +1,16 @@
+.git
+.env
+.venv*
+__pycache__
+*.py[cod]
+.pytest_cache
+data/*
+!data/public_seed.db
+ml/weights/*.pth
+!ml/weights/best_model.pth
+ml/weights/*.log
+ml/weights/predictions
+data/patches
+data/patches_kazakhstan_cities_2024
+data/predictions
+data/training_examples_png

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 RiskLevel = Literal["low", "medium", "high"]
@@ -186,9 +186,18 @@ class MonitoringAnalyzeRequest(BaseModel):
 
     year: int = Field(default=2024, ge=2017, le=2100)
     month: int | None = Field(default=None, ge=1, le=12, description="Observation month; defaults to January when omitted")
+    period: Literal["warm", "cold"] | None = Field(default=None, description="Seasonal satellite composite period")
     observation_date: date | None = Field(default=None, description="Optional exact observation date")
     enrich: bool = Field(default=False, description="Attempt supported environmental enrichment providers")
     metadata: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def validate_period_selection(self) -> "MonitoringAnalyzeRequest":
+        if self.period is not None and (self.month is not None or self.observation_date is not None):
+            raise ValueError("Seasonal period cannot be combined with month or observation_date.")
+        if self.period is not None and self.enrich:
+            raise ValueError("Environmental enrichment is currently available only for calendar-month analyses.")
+        return self
 
 
 class BackfillRequest(BaseModel):
@@ -227,6 +236,7 @@ class PersistedObservation(BaseModel):
     inference_run_id: str
     year: int
     month: int
+    period: Literal["month", "warm", "cold"] = "month"
     drought_fraction: float = Field(ge=0, le=1)
     drought_pixel_count: int = Field(ge=0)
     total_pixel_count: int = Field(ge=1)

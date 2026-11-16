@@ -113,7 +113,7 @@ def test_missing_screening_cells_remain_no_data_and_never_low_risk(monkeypatch, 
 
 
 def args(**overrides) -> Namespace:
-    values = {"year": 2024, "month": 9, "grid_version": "kz-grid-v1", "limit": None, "dry_run": False, "resume": True, "cell_id": [], "enrich": False, "force": False}
+    values = {"year": 2024, "month": 9, "all_months": False, "grid_version": "kz-grid-v1", "limit": None, "dry_run": False, "resume": True, "cell_id": [], "enrich": False, "force": False}
     values.update(overrides)
     return Namespace(**values)
 
@@ -128,7 +128,7 @@ def test_dry_run_does_not_persist_or_call_external_work(monkeypatch, capsys) -> 
     assert "zero database writes" in capsys.readouterr().out
 
 
-def test_resume_skips_a_ready_cell(monkeypatch) -> None:
+def test_resume_skips_a_ready_cell_and_shows_completion(monkeypatch, capsys) -> None:
     cells = [{"cell_id": "kz-grid-v1-1-1", "latitude": 49.5, "longitude": 69.5}]
     persisted = [{**cells[0], "location_id": "location-1"}]
     monkeypatch.setattr(prepare_national_grid, "configured_grid_cells", lambda *_args: cells)
@@ -137,6 +137,27 @@ def test_resume_skips_a_ready_cell(monkeypatch) -> None:
     monkeypatch.setattr(prepare_national_grid.national_grid_service, "grid_results", lambda *_args, **_kwargs: [{"cell_id": "kz-grid-v1-1-1", "status": "ready"}])
     monkeypatch.setattr(prepare_national_grid, "_perform_analysis", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("ready cells must be skipped")))
     assert prepare_national_grid.run(args()) == 0
+    output = capsys.readouterr().out
+    assert "[########################] 1/1 (100.0%)" in output
+    assert "complete" in output
+
+
+def test_all_months_runs_every_month_and_reports_overall_progress(monkeypatch, capsys) -> None:
+    cells = [{"cell_id": "kz-grid-v1-1-1", "latitude": 49.5, "longitude": 69.5}]
+    persisted = [{**cells[0], "location_id": "location-1"}]
+    monkeypatch.setattr(prepare_national_grid, "configured_grid_cells", lambda *_args: cells)
+    monkeypatch.setattr(prepare_national_grid, "grid_plan_summary", lambda *_args: {"inside_kazakhstan_count": 1, "candidate_count": 1})
+    monkeypatch.setattr(prepare_national_grid.national_grid_service, "ensure_grid_cells", lambda *_args: persisted)
+    monkeypatch.setattr(prepare_national_grid.national_grid_service, "grid_results", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(prepare_national_grid.monitoring_service, "get_location", lambda location_id: {"id": location_id})
+    monkeypatch.setattr(prepare_national_grid, "_perform_analysis", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(prepare_national_grid.national_grid_service, "record_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(prepare_national_grid.time, "sleep", lambda _seconds: None)
+
+    assert prepare_national_grid.run(args(all_months=True, month=None)) == 0
+    output = capsys.readouterr().out
+    assert "12 cell-months" in output
+    assert "[########################] 12/12 (100.0%)" in output
 
 
 def test_resume_skips_ready_and_failure_continues_to_next_cell(monkeypatch) -> None:
