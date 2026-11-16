@@ -54,7 +54,11 @@ The free service sleeps when idle and uses an ephemeral filesystem: edits and ne
 inference artifacts are lost after restarts or redeployments. The baked-in national
 grid snapshot is restored when a new instance starts. No Earth Engine credentials
 are included, so requests that fetch new satellite imagery require secure
-provider configuration in Render.
+provider configuration in Render. For hosted analysis, configure `GEE_PROJECT`
+and the full service-account key JSON as the secret environment variable
+`GEE_SERVICE_ACCOUNT_JSON` in the Render dashboard. The service account must be
+registered for Earth Engine use and have access to the project. Never commit the
+key, send it in chat, or put it in a frontend variable.
 
 ## API overview
 

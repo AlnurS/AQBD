@@ -1,5 +1,8 @@
 from io import BytesIO
+import json
+import sys
 import warnings
+from types import SimpleNamespace
 
 import numpy as np
 import requests
@@ -13,7 +16,14 @@ from app.config import PATCH_CHANNELS, PATCH_SIZE
 from app.main import app
 from app.services.segmentation_service import SegmentationModelUnavailableError
 from ml.dataset import NpyDroughtPatchDataset, normalize_patch
-from ml.export_gee_dataset import _city_split_map, _download_geotiff, _download_patch, export_dataset
+from ml.export_gee_dataset import (
+    EarthEngineConfigurationError,
+    _city_split_map,
+    _download_geotiff,
+    _download_patch,
+    export_dataset,
+    initialize_earth_engine,
+)
 from ml.train import TrainingConfig, train_segmentation
 
 
@@ -24,6 +34,46 @@ def test_normalize_patch_has_seven_channels_and_safe_range() -> None:
     assert normalized.shape == patch.shape
     assert normalized.min() >= 0
     assert normalized.max() <= 1
+
+
+def test_initialize_earth_engine_uses_service_account_environment_secret(monkeypatch) -> None:
+    key_json = json.dumps({"client_email": "aqua-demo@example.iam.gserviceaccount.com", "private_key": "test-key"})
+    calls = {}
+    credentials = object()
+
+    def create_credentials(email, key_data):
+        calls["credentials"] = (email, key_data)
+        return credentials
+
+    def initialize(actual_credentials, project):
+        calls["initialize"] = (actual_credentials, project)
+
+    monkeypatch.setenv("GEE_PROJECT", "aqua-demo-project")
+    monkeypatch.setenv("GEE_SERVICE_ACCOUNT_JSON", key_json)
+    monkeypatch.setitem(
+        sys.modules,
+        "ee",
+        SimpleNamespace(ServiceAccountCredentials=create_credentials, Initialize=initialize),
+    )
+
+    initialize_earth_engine()
+
+    assert calls["credentials"] == ("aqua-demo@example.iam.gserviceaccount.com", key_json)
+    assert calls["initialize"] == (credentials, "aqua-demo-project")
+
+
+def test_initialize_earth_engine_requires_project_for_service_account_secret(monkeypatch) -> None:
+    key_json = json.dumps({"client_email": "aqua-demo@example.iam.gserviceaccount.com"})
+    monkeypatch.delenv("GEE_PROJECT", raising=False)
+    monkeypatch.setenv("GEE_SERVICE_ACCOUNT_JSON", key_json)
+    monkeypatch.setitem(sys.modules, "ee", SimpleNamespace())
+
+    try:
+        initialize_earth_engine()
+    except EarthEngineConfigurationError as error:
+        assert "GEE_SERVICE_ACCOUNT_JSON" in str(error)
+    else:
+        raise AssertionError("Expected missing project configuration to fail explicitly")
 
 
 def test_npy_dataset_loads_paired_patch(tmp_path) -> None:

@@ -7,9 +7,10 @@ The output is educational research data only and is not a validated drought prod
 
 from __future__ import annotations
 
+import json
+import os
 import random
 import tempfile
-import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -108,19 +109,25 @@ def initialize_earth_engine() -> None:
     """
     ee = _earth_engine()
     try:
-        # Earth Engine now requires a Cloud project for most API requests.
-        # `earthengine set_project` also persists a default project, so this
-        # explicit value is optional when the CLI has already configured one.
         project = os.getenv("GEE_PROJECT")
-        if project:
+        service_account_json = os.getenv("GEE_SERVICE_ACCOUNT_JSON")
+        if service_account_json:
+            if not project:
+                raise ValueError("GEE_PROJECT must be set when using GEE_SERVICE_ACCOUNT_JSON.")
+            key_data = json.loads(service_account_json)
+            service_account = key_data.get("client_email")
+            if not service_account:
+                raise ValueError("The service-account JSON must contain client_email.")
+            credentials = ee.ServiceAccountCredentials(service_account, key_data=service_account_json)
+            ee.Initialize(credentials, project=project)
+        elif project:
             ee.Initialize(project=project)
         else:
             ee.Initialize()
     except Exception as error:  # Earth Engine raises multiple implementation-specific errors.
         raise EarthEngineConfigurationError(
-            "Google Earth Engine is not initialized. Run `earthengine authenticate` "
-            "and `earthengine set_project YOUR_EARTH_ENGINE_PROJECT`, or set "
-            "GEE_PROJECT in backend/.env."
+            "Google Earth Engine is not initialized. Set GEE_PROJECT and configure "
+            "application-default credentials or the GEE_SERVICE_ACCOUNT_JSON Render secret."
         ) from error
 
 
